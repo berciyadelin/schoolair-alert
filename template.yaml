@@ -1,0 +1,99 @@
+# template.yaml: SAM template for SchoolAir Alert
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: SchoolAir Alert - hourly AQI checks and school alerts
+
+Parameters:
+  DBHost:
+    Type: String
+    Description: RDS PostgreSQL endpoint
+  DBName:
+    Type: String
+    Default: schoolair
+  DBUser:
+    Type: String
+  DBPassword:
+    Type: String
+    NoEcho: true
+  AlertEmail:
+    Type: String
+    Description: Email that receives the alerts
+
+Globals:
+  Function:
+    Runtime: python3.12
+    Timeout: 60
+    Environment:
+      Variables:
+        DB_HOST: !Ref DBHost
+        DB_NAME: !Ref DBName
+        DB_USER: !Ref DBUser
+        DB_PASSWORD: !Ref DBPassword
+
+Resources:
+  AlertTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      Subscription:
+        - Protocol: email
+          Endpoint: !Ref AlertEmail
+
+  FetcherFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: lambdas/fetcher/
+      Handler: app.lambda_handler
+      Environment:
+        Variables:
+          SNS_TOPIC_ARN: !Ref AlertTopic
+      Policies:
+        - SNSPublishMessagePolicy:
+            TopicName: !GetAtt AlertTopic.TopicName
+      Events:
+        Hourly:
+          Type: Schedule
+          Properties:
+            Schedule: rate(1 hour)
+
+  ApiFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: lambdas/api/
+      Handler: app.lambda_handler
+      Events:
+        GetSchools:
+          Type: HttpApi
+          Properties:
+            Path: /schools
+            Method: GET
+
+  FrontendBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      WebsiteConfiguration:
+        IndexDocument: index.html
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: false
+        BlockPublicPolicy: false
+        IgnorePublicAcls: false
+        RestrictPublicBuckets: false
+
+  FrontendBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref FrontendBucket
+      PolicyDocument:
+        Statement:
+          - Effect: Allow
+            Principal: '*'
+            Action: s3:GetObject
+            Resource: !Sub '${FrontendBucket.Arn}/*'
+
+Outputs:
+  ApiUrl:
+    Description: Paste this into API_URL in frontend/index.html
+    Value: !Sub 'https://${ServerlessHttpApi}.execute-api.${AWS::Region}.amazonaws.com/schools'
+  WebsiteUrl:
+    Value: !GetAtt FrontendBucket.WebsiteURL
+  BucketName:
+    Value: !Ref FrontendBucket
